@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OneTab → Checkvist</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      background: #2c3e50;
+      color: #fff;
+      padding: 1rem 1.5rem;
+    }
+    header h1 { font-size: 1.25rem; font-weight: 600; }
+    header p  { font-size: 0.8rem; color: #aaa; margin-top: 0.2rem; }
+
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      padding: 1rem;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+    }
+
+    @media (max-width: 800px) {
+      main { grid-template-columns: 1fr; }
+    }
+
+    .panel {
+      background: #fff;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.1);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .panel-header {
+      padding: 0.75rem 1rem;
+      border-bottom: 1px solid #eee;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .panel-header h2 { font-size: 0.9rem; font-weight: 600; flex: 1; }
+
+    .panel-body { flex: 1; display: flex; flex-direction: column; padding: 0.75rem; gap: 0.5rem; }
+
+    textarea {
+      flex: 1;
+      min-height: 420px;
+      resize: vertical;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 0.6rem;
+      font-family: "Fira Mono", "Consolas", monospace;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      background: #fafafa;
+      color: #222;
+    }
+    textarea:focus { outline: 2px solid #3498db; border-color: transparent; }
+
+    .btn {
+      padding: 0.45rem 1rem;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.82rem;
+      font-weight: 500;
+      transition: background 0.15s;
+    }
+    .btn-primary { background: #3498db; color: #fff; }
+    .btn-primary:hover { background: #2176ae; }
+    .btn-secondary { background: #eee; color: #333; }
+    .btn-secondary:hover { background: #ddd; }
+    .btn-success { background: #27ae60; color: #fff; }
+    .btn-success:hover { background: #1e8449; }
+
+    .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+
+    .drop-zone {
+      border: 2px dashed #ccc;
+      border-radius: 6px;
+      padding: 1.5rem;
+      text-align: center;
+      color: #888;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .drop-zone:hover, .drop-zone.dragover { border-color: #3498db; background: #ebf5fb; color: #2176ae; }
+
+    .status {
+      font-size: 0.78rem;
+      padding: 0.4rem 0.6rem;
+      border-radius: 4px;
+      display: none;
+    }
+    .status.ok  { background: #eafaf1; color: #1e8449; display: block; }
+    .status.err { background: #fdecea; color: #c0392b; display: block; }
+
+    .options {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      font-size: 0.82rem;
+      align-items: center;
+    }
+    .options label { display: flex; align-items: center; gap: 0.3rem; cursor: pointer; }
+
+    .group-count { font-size: 0.78rem; color: #888; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>OneTab → Checkvist</h1>
+  <p>Convert a OneTab HTML export into Checkvist-ready markdown</p>
+</header>
+
+<main>
+  <!-- LEFT: Input -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>1. OneTab HTML</h2>
+    </div>
+    <div class="panel-body">
+      <div class="drop-zone" id="dropZone">
+        Drop your OneTab <code>.html</code> file here, or click to browse
+        <input type="file" id="fileInput" accept=".html,.htm" style="display:none">
+      </div>
+      <textarea id="inputArea" placeholder="…or paste the raw HTML here"></textarea>
+      <div class="row">
+        <button class="btn btn-primary" id="convertBtn">Convert →</button>
+        <button class="btn btn-secondary" id="clearBtn">Clear</button>
+      </div>
+      <div class="status" id="statusMsg"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Output -->
+  <div class="panel">
+    <div class="panel-header">
+      <h2>2. Checkvist Markdown</h2>
+      <span class="group-count" id="groupCount"></span>
+    </div>
+    <div class="panel-body">
+      <div class="options">
+        <label><input type="checkbox" id="optDate" checked> Include date label</label>
+        <label><input type="checkbox" id="optTitle" checked> Include group title</label>
+        <label><input type="checkbox" id="optBlank" checked> Blank line between groups</label>
+      </div>
+      <textarea id="outputArea" readonly placeholder="Output will appear here…"></textarea>
+      <div class="row">
+        <button class="btn btn-success" id="copyBtn">Copy to clipboard</button>
+        <button class="btn btn-secondary" id="dlBtn">Download .md</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ── OneTab HTML parser ──────────────────────────────────────────────────────
+//
+// OneTab's exported HTML has this rough structure:
+//
+//   <div>                          ← wrapper
+//     <div>                        ← group container
+//       <span>date string</span>   ← optional label
+//       <a href="…">title</a>
+//       <a href="…">title</a>
+//     </div>
+//     …
+//   </div>
+//
+// The actual class names differ across OneTab versions, so we parse
+// heuristically: groups are top-level divs that contain <a> tags.
+
+function parseOneTab(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+
+  // OneTab wraps everything in a single root div; groups are its children.
+  // Strategy: find all <a href> elements, then walk up to group boundaries.
+
+  // Try known class patterns first
+  let groups = [];
+
+  // Pattern A: divs with class containing "tabGroup" (older OneTab)
+  const tabGroupDivs = doc.querySelectorAll('div[class*="tabGroup"], div[class*="tab-group"]');
+  if (tabGroupDivs.length > 0) {
+    tabGroupDivs.forEach(div => {
+      const group = extractGroup(div);
+      if (group.tabs.length > 0) groups.push(group);
+    });
+    return groups;
+  }
+
+  // Pattern B: newer OneTab — groups are direct children of a single wrapper div
+  // Find the shallowest ancestor div that contains multiple divs each with links
+  const allLinks = [...doc.querySelectorAll('a[href]')].filter(a => isTabLink(a));
+  if (allLinks.length === 0) return [];
+
+  // Group links by their closest div ancestor (one level up from the link)
+  const groupMap = new Map();
+  allLinks.forEach(a => {
+    const parent = closestGroupDiv(a);
+    if (!parent) return;
+    if (!groupMap.has(parent)) groupMap.set(parent, []);
+    groupMap.get(parent).push(a);
+  });
+
+  // Sort groups in document order
+  const allDivs = [...doc.querySelectorAll('div')];
+  const sorted = [...groupMap.keys()].sort((a, b) => allDivs.indexOf(a) - allDivs.indexOf(b));
+
+  sorted.forEach(div => {
+    const links = groupMap.get(div);
+    const label = extractLabel(div);
+    groups.push({
+      label,
+      tabs: links.map(a => ({ url: a.href, title: (a.textContent || a.href).trim() }))
+    });
+  });
+
+  return groups;
+}
+
+function isTabLink(a) {
+  const href = a.href || '';
+  // exclude OneTab UI links
+  return href.startsWith('http') && !href.includes('one-tab.com') && !href.includes('onetab.com');
+}
+
+function closestGroupDiv(el) {
+  let node = el.parentElement;
+  while (node) {
+    if (node.tagName === 'DIV') return node;
+    node = node.parentElement;
+  }
+  return null;
+}
+
+function extractGroup(div) {
+  const label = extractLabel(div);
+  const tabs = [...div.querySelectorAll('a[href]')]
+    .filter(isTabLink)
+    .map(a => ({ url: a.href, title: (a.textContent || a.href).trim() }));
+  return { label, tabs };
+}
+
+function extractLabel(div) {
+  // Look for a span/div/p that looks like a date or title at the top of this group div
+  const candidates = [...div.childNodes].filter(n =>
+    (n.nodeType === Node.ELEMENT_NODE) &&
+    ['SPAN', 'DIV', 'P', 'H1','H2','H3','H4'].includes(n.tagName) &&
+    !n.querySelector('a')
+  );
+  for (const c of candidates) {
+    const text = c.textContent.trim();
+    if (text.length > 0 && text.length < 120) return text;
+  }
+  return '';
+}
+
+// ── Markdown formatter ──────────────────────────────────────────────────────
+
+function toCheckvist(groups, opts) {
+  const { includeDate, includeTitle, blankBetween } = opts;
+  const lines = [];
+
+  groups.forEach((group, i) => {
+    // Build the top-level item text
+    let heading = '';
+    if (group.label) {
+      // Try to split "date - title" or just use as-is
+      const dateMatch = group.label.match(/^(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\w+ \d{1,2},? \d{4}|\d{4}-\d{2}-\d{2})/i);
+      if (dateMatch) {
+        const rest = group.label.slice(dateMatch[0].length).replace(/^\s*[-–—|]\s*/, '').trim();
+        const parts = [];
+        if (includeDate) parts.push(dateMatch[0]);
+        if (includeTitle && rest) parts.push(rest);
+        heading = parts.join(' – ');
+      } else {
+        heading = includeTitle ? group.label : (includeDate ? `Group ${i + 1}` : `Group ${i + 1}`);
+      }
+    } else {
+      heading = includeDate ? `Group ${i + 1}` : `Group ${i + 1}`;
+    }
+
+    lines.push(heading);
+    group.tabs.forEach(tab => {
+      const safeTitle = tab.title.replace(/[\[\]]/g, m => '\\' + m);
+      lines.push(`  [${safeTitle}](${tab.url})`);
+    });
+
+    if (blankBetween && i < groups.length - 1) lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
+// ── UI wiring ───────────────────────────────────────────────────────────────
+
+const inputArea  = document.getElementById('inputArea');
+const outputArea = document.getElementById('outputArea');
+const statusMsg  = document.getElementById('statusMsg');
+const groupCount = document.getElementById('groupCount');
+const dropZone   = document.getElementById('dropZone');
+const fileInput  = document.getElementById('fileInput');
+
+function setStatus(msg, ok) {
+  statusMsg.textContent = msg;
+  statusMsg.className = 'status ' + (ok ? 'ok' : 'err');
+}
+
+function getOpts() {
+  return {
+    includeDate:  document.getElementById('optDate').checked,
+    includeTitle: document.getElementById('optTitle').checked,
+    blankBetween: document.getElementById('optBlank').checked,
+  };
+}
+
+function runConvert() {
+  const html = inputArea.value.trim();
+  if (!html) { setStatus('Paste some HTML first.', false); return; }
+
+  let groups;
+  try {
+    groups = parseOneTab(html);
+  } catch(e) {
+    setStatus('Parse error: ' + e.message, false);
+    return;
+  }
+
+  if (groups.length === 0) {
+    setStatus('No tab groups found. Make sure you pasted the full OneTab HTML export.', false);
+    outputArea.value = '';
+    groupCount.textContent = '';
+    return;
+  }
+
+  const md = toCheckvist(groups, getOpts());
+  outputArea.value = md;
+  const tabTotal = groups.reduce((s, g) => s + g.tabs.length, 0);
+  groupCount.textContent = `${groups.length} group${groups.length !== 1 ? 's' : ''}, ${tabTotal} tab${tabTotal !== 1 ? 's' : ''}`;
+  setStatus(`Converted ${groups.length} group(s) successfully.`, true);
+}
+
+document.getElementById('convertBtn').addEventListener('click', runConvert);
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  inputArea.value = '';
+  outputArea.value = '';
+  statusMsg.className = 'status';
+  groupCount.textContent = '';
+});
+
+document.getElementById('copyBtn').addEventListener('click', () => {
+  const text = outputArea.value;
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyBtn');
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1500);
+  });
+});
+
+document.getElementById('dlBtn').addEventListener('click', () => {
+  const text = outputArea.value;
+  if (!text) return;
+  const blob = new Blob([text], { type: 'text/markdown' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'checkvist-import.md';
+  a.click(); URL.revokeObjectURL(url);
+});
+
+// Re-render on option change
+['optDate','optTitle','optBlank'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    if (outputArea.value) runConvert();
+  });
+});
+
+// File drop / browse
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) readFile(file);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) readFile(fileInput.files[0]);
+});
+
+function readFile(file) {
+  const reader = new FileReader();
+  reader.onload = e => {
+    inputArea.value = e.target.result;
+    runConvert();
+  };
+  reader.readAsText(file);
+}
+</script>
+</body>
+</html>
