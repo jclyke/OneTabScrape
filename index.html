@@ -175,104 +175,98 @@
 <script>
 // ── OneTab HTML parser ──────────────────────────────────────────────────────
 //
-// OneTab's exported HTML has this rough structure:
-//
-//   <div>                          ← wrapper
-//     <div>                        ← group container
-//       <span>date string</span>   ← optional label
-//       <a href="…">title</a>
-//       <a href="…">title</a>
-//     </div>
-//     …
-//   </div>
-//
-// The actual class names differ across OneTab versions, so we parse
-// heuristically: groups are top-level divs that contain <a> tags.
+// Current OneTab export structure (v2024+):
+//   div.tabGroup
+//     div.tabGroupHeader
+//       div.tabGroupHeaderRow
+//         div.tabGroupTitleText   ← "N tabs" OR a user-given name
+//         div.tabCountInline      ← only present when title is a real name
+//       div.createdDate           ← "Created M/D/YYYY, H:MM:SS AM/PM"
+//     div.tabList
+//       div.tab
+//         a.tabLink[href]
 
 function parseOneTab(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
+  const groups = [];
 
-  // OneTab wraps everything in a single root div; groups are its children.
-  // Strategy: find all <a href> elements, then walk up to group boundaries.
-
-  // Try known class patterns first
-  let groups = [];
-
-  // Pattern A: divs with class containing "tabGroup" (older OneTab)
-  const tabGroupDivs = doc.querySelectorAll('div[class*="tabGroup"], div[class*="tab-group"]');
+  // Modern OneTab: .tabGroup elements
+  const tabGroupDivs = doc.querySelectorAll('div.tabGroup');
   if (tabGroupDivs.length > 0) {
     tabGroupDivs.forEach(div => {
-      const group = extractGroup(div);
+      const group = extractModernGroup(div);
       if (group.tabs.length > 0) groups.push(group);
     });
     return groups;
   }
 
-  // Pattern B: newer OneTab — groups are direct children of a single wrapper div
-  // Find the shallowest ancestor div that contains multiple divs each with links
-  const allLinks = [...doc.querySelectorAll('a[href]')].filter(a => isTabLink(a));
+  // Fallback: heuristic scan for any divs containing tab links
+  const allLinks = [...doc.querySelectorAll('a[href]')].filter(isTabLink);
   if (allLinks.length === 0) return [];
 
-  // Group links by their closest div ancestor (one level up from the link)
   const groupMap = new Map();
   allLinks.forEach(a => {
-    const parent = closestGroupDiv(a);
-    if (!parent) return;
-    if (!groupMap.has(parent)) groupMap.set(parent, []);
-    groupMap.get(parent).push(a);
+    // Walk up until we find a div that directly contains this link's parent .tab div
+    let node = a.parentElement;
+    while (node && node.tagName !== 'BODY') {
+      if (node.tagName === 'DIV' && node.parentElement && node.parentElement.tagName === 'DIV') {
+        const siblings = [...node.parentElement.children].filter(c => c.tagName === 'DIV' && c.querySelector('a[href]'));
+        if (siblings.length > 1) {
+          if (!groupMap.has(node.parentElement)) groupMap.set(node.parentElement, []);
+          groupMap.get(node.parentElement).push(a);
+          return;
+        }
+      }
+      node = node.parentElement;
+    }
   });
 
-  // Sort groups in document order
   const allDivs = [...doc.querySelectorAll('div')];
-  const sorted = [...groupMap.keys()].sort((a, b) => allDivs.indexOf(a) - allDivs.indexOf(b));
-
-  sorted.forEach(div => {
-    const links = groupMap.get(div);
-    const label = extractLabel(div);
-    groups.push({
-      label,
-      tabs: links.map(a => ({ url: a.href, title: (a.textContent || a.href).trim() }))
+  [...groupMap.keys()]
+    .sort((a, b) => allDivs.indexOf(a) - allDivs.indexOf(b))
+    .forEach(div => {
+      const links = groupMap.get(div);
+      groups.push({
+        date: '',
+        title: '',
+        tabs: links.map(a => ({ url: a.href, title: (a.textContent || a.href).trim() }))
+      });
     });
-  });
 
   return groups;
 }
 
-function isTabLink(a) {
-  const href = a.href || '';
-  // exclude OneTab UI links
-  return href.startsWith('http') && !href.includes('one-tab.com') && !href.includes('onetab.com');
-}
-
-function closestGroupDiv(el) {
-  let node = el.parentElement;
-  while (node) {
-    if (node.tagName === 'DIV') return node;
-    node = node.parentElement;
+function extractModernGroup(div) {
+  // Date: "Created 5/30/2026, 8:56:39 PM" → extract date portion
+  const dateEl = div.querySelector('.createdDate');
+  let date = '';
+  if (dateEl) {
+    const raw = dateEl.textContent.trim().replace(/^Created\s*/i, '');
+    // Keep only the date part before the comma
+    date = raw.split(',')[0].trim();
   }
-  return null;
-}
 
-function extractGroup(div) {
-  const label = extractLabel(div);
-  const tabs = [...div.querySelectorAll('a[href]')]
+  // Title: use tabGroupTitleText only when it's a real name (not just "N tabs")
+  const titleEl = div.querySelector('.tabGroupTitleText');
+  let title = '';
+  if (titleEl) {
+    const t = titleEl.textContent.trim();
+    // "N tabs" or "N tab" → not a real title
+    if (!/^\d+\s+tabs?$/i.test(t)) title = t;
+  }
+
+  const tabs = [...div.querySelectorAll('a.tabLink[href]')]
     .filter(isTabLink)
     .map(a => ({ url: a.href, title: (a.textContent || a.href).trim() }));
-  return { label, tabs };
+
+  return { date, title, tabs };
 }
 
-function extractLabel(div) {
-  // Look for a span/div/p that looks like a date or title at the top of this group div
-  const candidates = [...div.childNodes].filter(n =>
-    (n.nodeType === Node.ELEMENT_NODE) &&
-    ['SPAN', 'DIV', 'P', 'H1','H2','H3','H4'].includes(n.tagName) &&
-    !n.querySelector('a')
-  );
-  for (const c of candidates) {
-    const text = c.textContent.trim();
-    if (text.length > 0 && text.length < 120) return text;
-  }
-  return '';
+function isTabLink(a) {
+  const href = a.href || '';
+  return href.startsWith('http') &&
+    !href.includes('one-tab.com') &&
+    !href.includes('onetab.com');
 }
 
 // ── Markdown formatter ──────────────────────────────────────────────────────
@@ -282,23 +276,10 @@ function toCheckvist(groups, opts) {
   const lines = [];
 
   groups.forEach((group, i) => {
-    // Build the top-level item text
-    let heading = '';
-    if (group.label) {
-      // Try to split "date - title" or just use as-is
-      const dateMatch = group.label.match(/^(\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|\w+ \d{1,2},? \d{4}|\d{4}-\d{2}-\d{2})/i);
-      if (dateMatch) {
-        const rest = group.label.slice(dateMatch[0].length).replace(/^\s*[-–—|]\s*/, '').trim();
-        const parts = [];
-        if (includeDate) parts.push(dateMatch[0]);
-        if (includeTitle && rest) parts.push(rest);
-        heading = parts.join(' – ');
-      } else {
-        heading = includeTitle ? group.label : (includeDate ? `Group ${i + 1}` : `Group ${i + 1}`);
-      }
-    } else {
-      heading = includeDate ? `Group ${i + 1}` : `Group ${i + 1}`;
-    }
+    const parts = [];
+    if (includeDate && group.date) parts.push(group.date);
+    if (includeTitle && group.title) parts.push(group.title);
+    const heading = parts.join(' – ') || `Group ${i + 1}`;
 
     lines.push(heading);
     group.tabs.forEach(tab => {
