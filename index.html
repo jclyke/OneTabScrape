@@ -159,7 +159,11 @@
     </div>
     <div class="panel-body">
       <div class="options">
-        <label><input type="checkbox" id="optDate" checked> Include date label</label>
+        <label><input type="radio" name="optMode" id="optMultiline" checked> Multiline</label>
+        <label><input type="radio" name="optMode" id="optSingleline"> Single-line (paste &amp; split)</label>
+      </div>
+      <div class="options" id="multilineOpts">
+        <label><input type="checkbox" id="optDate" checked> Include date</label>
         <label><input type="checkbox" id="optTitle" checked> Include group title</label>
         <label><input type="checkbox" id="optBlank" checked> Blank line between groups</label>
       </div>
@@ -272,6 +276,8 @@ function isTabLink(a) {
 // ── Markdown formatter ──────────────────────────────────────────────────────
 
 function toCheckvist(groups, opts) {
+  if (opts.singleLine) return toSingleLine(groups, opts);
+
   const { includeDate, includeTitle, blankBetween } = opts;
   const lines = [];
 
@@ -293,6 +299,19 @@ function toCheckvist(groups, opts) {
   return lines.join('\n');
 }
 
+function toSingleLine(groups, opts) {
+  return groups.map((group, i) => {
+    const parts = ['OneTab Links'];
+    if (group.date) parts.push(group.date);
+    if (group.title) parts.push(group.title);
+    group.tabs.forEach(tab => {
+      const safeTitle = tab.title.replace(/[\[\]]/g, m => '\\' + m);
+      parts.push(`[${safeTitle}](${tab.url})`);
+    });
+    return parts.join(' | ');
+  }).join('\n');
+}
+
 // ── UI wiring ───────────────────────────────────────────────────────────────
 
 const inputArea  = document.getElementById('inputArea');
@@ -309,10 +328,17 @@ function setStatus(msg, ok) {
 
 function getOpts() {
   return {
+    singleLine:   document.getElementById('optSingleline').checked,
     includeDate:  document.getElementById('optDate').checked,
     includeTitle: document.getElementById('optTitle').checked,
     blankBetween: document.getElementById('optBlank').checked,
   };
+}
+
+function syncModeUI() {
+  const isSingle = document.getElementById('optSingleline').checked;
+  document.getElementById('multilineOpts').style.display = isSingle ? 'none' : '';
+  if (outputArea.value) runConvert();
 }
 
 function runConvert() {
@@ -377,6 +403,8 @@ document.getElementById('dlBtn').addEventListener('click', () => {
     if (outputArea.value) runConvert();
   });
 });
+document.getElementById('optMultiline').addEventListener('change', syncModeUI);
+document.getElementById('optSingleline').addEventListener('change', syncModeUI);
 
 // File drop / browse
 dropZone.addEventListener('click', () => fileInput.click());
